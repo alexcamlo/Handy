@@ -322,6 +322,10 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 cancel_current_operation(app);
             }
             "quit" => {
+                // Restore input even when the user quits while recording.
+                if let Some(audio) = app.try_state::<Arc<AudioRecordingManager>>() {
+                    audio.restore_input_mute();
+                }
                 app.exit(0);
             }
             id if id.starts_with("model_select:") => {
@@ -1158,6 +1162,13 @@ pub fn run(cli_args: CliArgs) {
                 tray::recreate_tray_icon(app);
             }
             show_main_window(app);
+        }
+        tauri::RunEvent::Exit => {
+            // Unlike transcription model cleanup, restoring the microphone's
+            // previous hardware state must happen before process exit.
+            if let Some(audio) = app.try_state::<Arc<AudioRecordingManager>>() {
+                audio.restore_input_mute();
+            }
         }
         // No transcription teardown on exit: transcribe.cpp runs only in the
         // worker process, which exits by itself as soon as this process's end
