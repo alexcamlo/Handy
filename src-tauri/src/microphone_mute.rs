@@ -243,7 +243,7 @@ mod macos {
         }
 
         if !supported {
-            warn!("Selected microphone exposes no writable CoreAudio input mute or level");
+            return Err("Selected microphone exposes no writable CoreAudio input mute or gain control".into());
         }
         if snapshot.changed.is_empty() {
             Ok(None)
