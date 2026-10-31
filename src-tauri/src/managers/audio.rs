@@ -786,7 +786,7 @@ impl AudioRecordingManager {
 
     /// Restore the selected microphone's original mute/gain state, if changed.
     /// The snapshot targets the original device even if macOS switches defaults.
-    fn restore_input_mute(&self) {
+    pub fn restore_input_mute(&self) {
         let snapshot = self.input_mute_state.lock().unwrap().take();
         drop(snapshot);
     }
