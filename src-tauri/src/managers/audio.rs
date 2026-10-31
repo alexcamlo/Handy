@@ -1056,8 +1056,14 @@ impl AudioRecordingManager {
             // unavailable named microphone can fall back to the system default.
             // Keep the snapshot local until start succeeds, so every failure
             // and retry restores it automatically (RAII).
-            let input_mute = if get_settings(&self.app_handle).unmute_microphone_while_recording {
-                let selected = get_settings(&self.app_handle).selected_microphone;
+            let microphone_settings = get_settings(&self.app_handle);
+            let input_mute = if microphone_settings.unmute_microphone_while_recording {
+                let selected = match self.desired_microphone(&microphone_settings) {
+                    DesiredMicrophone::Default => None,
+                    DesiredMicrophone::Selected(name) | DesiredMicrophone::Clamshell(name) => {
+                        Some(name)
+                    }
+                };
                 match microphone_mute::unmute_for_recording(selected.as_deref()) {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
