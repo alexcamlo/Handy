@@ -7,6 +7,7 @@ use crate::audio_toolkit::{
     CaptureSink, CaptureVad, SileroVad, SpeechScorer, VadPolicy, VoiceActivityDetector,
 };
 use crate::helpers::clamshell;
+use crate::microphone_mute::{self, InputMuteSnapshot};
 use crate::managers::transcription::StreamRouter;
 use crate::settings::{get_settings, write_settings, AppSettings, VadBackend};
 use crate::utils;
@@ -476,6 +477,8 @@ pub struct AudioRecordingManager {
     is_open: Arc<Mutex<bool>>,
     is_recording: Arc<Mutex<bool>>,
     mute_state: Arc<Mutex<MuteState>>,
+    /// Input mute/gain to restore after the recorder has captured its final samples.
+    input_mute_state: Arc<Mutex<Option<InputMuteSnapshot>>>,
     close_generation: Arc<AtomicU64>,
     cancel_generation: Arc<AtomicU64>,
     /// Lock-free mirror of "is the state in {Recording, Stopping}",
@@ -532,6 +535,7 @@ impl AudioRecordingManager {
             is_open: Arc::new(Mutex::new(false)),
             is_recording: Arc::new(Mutex::new(false)),
             mute_state: Arc::new(Mutex::new(MuteState::default())),
+            input_mute_state: Arc::new(Mutex::new(None)),
             close_generation: Arc::new(AtomicU64::new(0)),
             cancel_generation: Arc::new(AtomicU64::new(0)),
             recording_active: Arc::new(AtomicBool::new(false)),
@@ -780,6 +784,13 @@ impl AudioRecordingManager {
         }
     }
 
+    /// Restore the selected microphone's original mute/gain state, if changed.
+    /// The snapshot targets the original device even if macOS switches defaults.
+    fn restore_input_mute(&self) {
+        let snapshot = self.input_mute_state.lock().unwrap().take();
+        drop(snapshot);
+    }
+
     pub fn start_microphone_stream(&self) -> Result<(), anyhow::Error> {
         let mut open_flag = self.is_open.lock().unwrap();
         if *open_flag {
@@ -897,6 +908,7 @@ impl AudioRecordingManager {
     pub fn stop_microphone_stream(&self) {
         let mut open_flag = self.is_open.lock().unwrap();
         if !*open_flag {
+            self.restore_input_mute();
             return;
         }
 
@@ -913,6 +925,9 @@ impl AudioRecordingManager {
             self.close_microphone(microphone);
         }
 
+        // Fallback for an externally closed stream. Normal stop/cancel already
+        // restores this immediately after the final recording samples arrive.
+        self.restore_input_mute();
         *open_flag = false;
         debug!("Microphone stream stopped");
     }
@@ -1037,6 +1052,23 @@ impl AudioRecordingManager {
                 return Err(e);
             }
 
+            // Capture the actual input state only after opening the stream: an
+            // unavailable named microphone can fall back to the system default.
+            // Keep the snapshot local until start succeeds, so every failure
+            // and retry restores it automatically (RAII).
+            let input_mute = if get_settings(&self.app_handle).unmute_microphone_while_recording {
+                let selected = get_settings(&self.app_handle).selected_microphone;
+                match microphone_mute::unmute_for_recording(selected.as_deref()) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        warn!("Could not temporarily unmute microphone: {error}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let (ready_tx, receiver) = mpsc::channel();
             let sink = CaptureSink::new(
                 self.lend_vad()?,
@@ -1053,6 +1085,7 @@ impl AudioRecordingManager {
             };
             match microphone.recorder.start(sink) {
                 Ok(()) => {
+                    *self.input_mute_state.lock().unwrap() = input_mute;
                     let generation = self.capture_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     *self.is_recording.lock().unwrap() = true;
                     self.set_state(
@@ -1234,6 +1267,9 @@ impl AudioRecordingManager {
                     }
                 };
 
+                // Keep the input live until the optional trailing buffer has
+                // been captured and the recorder has fully stopped.
+                self.restore_input_mute();
                 *self.is_recording.lock().unwrap() = false;
                 self.set_state(&mut self.state.lock().unwrap(), RecordingState::Idle);
 
@@ -1282,14 +1318,17 @@ impl AudioRecordingManager {
 
         match *state {
             RecordingState::Recording { .. } => {
-                self.set_state(&mut state, RecordingState::Idle);
+                // Block a new start until the recorder has stopped and the
+                // previous input mute state has been restored.
+                self.set_state(&mut state, RecordingState::Stopping);
                 drop(state);
 
                 if let Some(microphone) = self.recorder.lock().unwrap().as_ref() {
                     let _ = self.collect_recording(microphone); // Discard the result
                 }
-
+                self.restore_input_mute();
                 *self.is_recording.lock().unwrap() = false;
+                self.set_state(&mut self.state.lock().unwrap(), RecordingState::Idle);
 
                 // In on-demand mode, close the mic (lazily if the setting is enabled)
                 if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
