@@ -81,7 +81,11 @@ mod macos {
     }
 
     fn address(selector: u32, scope: u32, element: u32) -> PropertyAddress {
-        PropertyAddress { selector, scope, element }
+        PropertyAddress {
+            selector,
+            scope,
+            element,
+        }
     }
 
     fn get<T: Default>(object: u32, property: PropertyAddress) -> Result<T, String> {
@@ -89,7 +93,11 @@ mod macos {
         let mut size = size_of::<T>() as u32;
         let status = unsafe {
             AudioObjectGetPropertyData(
-                object, &property, 0, ptr::null(), &mut size,
+                object,
+                &property,
+                0,
+                ptr::null(),
+                &mut size,
                 (&mut value as *mut T).cast(),
             )
         };
@@ -102,7 +110,11 @@ mod macos {
     fn set<T>(object: u32, property: PropertyAddress, value: T) -> Result<(), String> {
         let status = unsafe {
             AudioObjectSetPropertyData(
-                object, &property, 0, ptr::null(), size_of::<T>() as u32,
+                object,
+                &property,
+                0,
+                ptr::null(),
+                size_of::<T>() as u32,
                 (&value as *const T).cast(),
             )
         };
@@ -139,13 +151,17 @@ mod macos {
             return Err("CoreAudio returned an empty device name".into());
         }
         let mut buffer = [0 as c_char; 1024];
-        let ok = unsafe { CFStringGetCString(raw, buffer.as_mut_ptr(), buffer.len() as isize, UTF8) };
+        let ok = unsafe {
+            CFStringGetCString(raw, buffer.as_mut_ptr(), buffer.len() as isize, UTF8)
+        };
         // CoreAudio gives the caller an owned CFStringRef for this property.
         unsafe { CFRelease(raw) };
         if ok == 0 {
             return Err("Could not decode CoreAudio microphone name".into());
         }
-        Ok(unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_string_lossy().into_owned())
+        Ok(unsafe { CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned())
     }
 
     fn selected_device(name: Option<&str>) -> Result<AudioDeviceId, String> {
@@ -164,20 +180,29 @@ mod macos {
         let mut devices = vec![0u32; size as usize / size_of::<AudioDeviceId>()];
         let status = unsafe {
             AudioObjectGetPropertyData(
-                SYSTEM_OBJECT, &property, 0, ptr::null(), &mut size,
+                SYSTEM_OBJECT,
+                &property,
+                0,
+                ptr::null(),
+                &mut size,
                 devices.as_mut_ptr().cast(),
             )
         };
         if status != 0 {
             return Err(format!("Cannot read CoreAudio devices ({status})"));
         }
-        let matches: Vec<_> = devices.into_iter()
+        let matches: Vec<_> = devices
+            .into_iter()
             .filter(|&device| device_name(device).as_deref() == Ok(name))
             .collect();
         match matches.as_slice() {
             [device] => Ok(*device),
-            [] => Err(format!("Selected microphone '{name}' is not available in CoreAudio")),
-            _ => Err(format!("Multiple microphones are named '{name}'; refusing to alter an ambiguous device")),
+            [] => Err(format!(
+                "Selected microphone '{name}' is not available in CoreAudio"
+            )),
+            _ => Err(format!(
+                "Multiple microphones are named '{name}'; refusing to alter an ambiguous device"
+            )),
         }
     }
 
@@ -197,10 +222,12 @@ mod macos {
         fn drop(&mut self) {
             for control in self.changed.iter().rev() {
                 let result = match *control {
-                    SavedControl::Mute { element, value } =>
-                        set(self.device, address(DEVICE_MUTE, INPUT, element), value),
-                    SavedControl::Volume { element, value } =>
-                        set(self.device, address(DEVICE_VOLUME, INPUT, element), value),
+                    SavedControl::Mute { element, value } => {
+                        set(self.device, address(DEVICE_MUTE, INPUT, element), value)
+                    }
+                    SavedControl::Volume { element, value } => {
+                        set(self.device, address(DEVICE_VOLUME, INPUT, element), value)
+                    }
                 };
                 if let Err(error) = result {
                     warn!("Could not restore microphone input state: {error}");
@@ -216,7 +243,10 @@ mod macos {
         if device == 0 {
             return Err("No CoreAudio input device is selected".into());
         }
-        let mut snapshot = InputMuteSnapshot { device, changed: Vec::new() };
+        let mut snapshot = InputMuteSnapshot {
+            device,
+            changed: Vec::new(),
+        };
         let mut supported = false;
 
         for element in control_elements(device, DEVICE_MUTE) {
@@ -225,7 +255,10 @@ mod macos {
             supported = true;
             if was_muted != 0 {
                 set(device, property, 0u32)?;
-                snapshot.changed.push(SavedControl::Mute { element, value: was_muted });
+                snapshot.changed.push(SavedControl::Mute {
+                    element,
+                    value: was_muted,
+                });
             }
         }
 
@@ -238,12 +271,18 @@ mod macos {
             supported = true;
             if previous <= f32::EPSILON {
                 set(device, property, RECORDING_INPUT_GAIN)?;
-                snapshot.changed.push(SavedControl::Volume { element, value: previous });
+                snapshot.changed.push(SavedControl::Volume {
+                    element,
+                    value: previous,
+                });
             }
         }
 
         if !supported {
-            return Err("Selected microphone exposes no writable CoreAudio input mute or gain control".into());
+            return Err(
+                "Selected microphone exposes no writable CoreAudio input mute or gain control"
+                    .into(),
+            );
         }
         if snapshot.changed.is_empty() {
             Ok(None)
@@ -261,6 +300,8 @@ pub use macos::{unmute_for_recording, InputMuteSnapshot};
 pub struct InputMuteSnapshot;
 
 #[cfg(not(target_os = "macos"))]
-pub fn unmute_for_recording(_selected_microphone: Option<&str>) -> Result<Option<InputMuteSnapshot>, String> {
+pub fn unmute_for_recording(
+    _selected_microphone: Option<&str>,
+) -> Result<Option<InputMuteSnapshot>, String> {
     Ok(None)
 }
