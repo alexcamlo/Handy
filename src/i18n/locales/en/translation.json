@@ -809,6 +809,10 @@
         "label": "Mute While Recording",
         "description": "Mute system audio during recording"
       },
+      "unmuteMicrophoneWhileRecording": {
+        "label": "Unmute Microphone While Recording",
+        "description": "Temporarily unmute the selected Mac microphone while dictating and restore its previous mute state when recording ends"
+      },
       "appendTrailingSpace": {
         "label": "Append Trailing Space",
         "description": "Add a space after pasted transcription"
